@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import numpy as np
+from scipy import stats
 
 from ..embed import AdjacencySpectralEmbed, select_dimension
 from ..utils import import_graph, is_symmetric
@@ -116,6 +117,51 @@ class LatentDistributionTest(BaseInference):
         X1 = np.multiply(t.reshape(-1, 1).T, X1)
         return X1, X2
 
+    def _fit_avantis_plug_in(self, X):
+        '''
+        Estimates the variance using the plug-in estimator.
+        RDPG Survey, equation 10.
+        '''
+        n = len(X.T)
+        delta = 1 / (n) * (X @ X.T)
+        delta_inverse = np.linalg.inv(delta)
+
+        def avantis_plug_in(x):
+            if x.ndim < 2:
+                undo_dimensions = True
+                x = x.reshape(-1, 1)
+            else: 
+                undo_dimensions = False
+            middle_term = np.sum(x.T @ X - (x.T @ X)**2, axis=1) / (n)
+            middle_term = np.outer(middle_term, delta)
+            if undo_dimensions:
+                middle_term = middle_term.reshape(delta.shape)
+            else:
+                middle_term = middle_term.reshape(-1, *delta.shape)
+            return delta_inverse @ middle_term @ delta_inverse
+
+        return avantis_plug_in
+
+
+    def _sample_noisy_points(self, X, Y):
+        X = X.T
+        Y = Y.T # TODO
+        n = len(X.T)
+        m = len(Y.T)
+        two_samples = np.concatenate([X, Y], axis=1)
+        get_sigma = self._fit_avantis_plug_in(two_samples)
+        sigma_X = get_sigma(X) / m
+        sigma_Y = get_sigma(Y) / n
+        X_sampled = np.zeros(X.shape)
+        for i in range(n):
+            X_sampled[:,i] = X[:, i] + stats.multivariate_normal.rvs(0, cov=sigma_X[i]).T
+        Y_sampled = np.zeros(Y.shape)
+        for i in range(m):
+            Y_sampled[:,i] = Y[:, i] + stats.multivariate_normal.rvs(0, cov=sigma_Y[i]).T
+        X_sampled = X_sampled.T
+        Y_sampled = Y_sampled.T
+        return X_sampled, Y_sampled
+
     def _bootstrap(self, X, Y, M=200):
         N, _ = X.shape
         M2, _ = Y.shape
@@ -130,7 +176,7 @@ class LatentDistributionTest(BaseInference):
             statistics[i] = self._statistic(bs_X2, bs_Y2)
         return statistics
 
-    def fit(self, A1, A2):
+    def fit(self, A1, A2, pass_graph=True, correct=False):
         """
         Fits the test to the two input graphs
 
@@ -144,18 +190,23 @@ class LatentDistributionTest(BaseInference):
         p_ : float
             The p value corresponding to the specified hypothesis test
         """
-        A1 = import_graph(A1)
-        A2 = import_graph(A2)
-        # if not is_symmetric(A1) or not is_symmetric(A2):
-        #     raise NotImplementedError()  # TODO asymmetric case
-        if self.n_components is None:
-            # get the last elbow from ZG for each and take the maximum
-            num_dims1 = select_dimension(A1)[0][-1]
-            num_dims2 = select_dimension(A2)[0][-1]
-            self.n_components = max(num_dims1, num_dims2)
+        if pass_graph:
+            A1 = import_graph(A1)
+            A2 = import_graph(A2)
+            # if not is_symmetric(A1) or not is_symmetric(A2):
+            #     raise NotImplementedError()  # TODO asymmetric case
+            if self.n_components is None:
+                # get the last elbow from ZG for each and take the maximum
+                num_dims1 = select_dimension(A1)[0][-1]
+                num_dims2 = select_dimension(A2)[0][-1]
+                self.n_components = max(num_dims1, num_dims2)
 
-        X1_hat, X2_hat = self._embed(A1, A2)
+            X1_hat, X2_hat = self._embed(A1, A2)
+        else:
+            X1_hat, X2_hat = A1, A2
         X1_hat, X2_hat = self._median_heuristic(X1_hat, X2_hat)
+        if correct: #TODO
+            X1_hat, X_hat = self._sample_noisy_points(X1_hat, X2_hat)
         U = self._statistic(X1_hat, X2_hat)
         null_distribution = self._bootstrap(X1_hat, X2_hat, self.n_bootstraps)
         self.null_distribution_ = null_distribution
