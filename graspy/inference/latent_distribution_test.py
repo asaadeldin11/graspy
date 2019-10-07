@@ -142,10 +142,9 @@ class LatentDistributionTest(BaseInference):
 
         return avantis_plug_in
 
-
     def _sample_noisy_points(self, X, Y):
         X = X.T
-        Y = Y.T # TODO
+        Y = Y.T
         n = len(X.T)
         m = len(Y.T)
         two_samples = np.concatenate([X, Y], axis=1)
@@ -158,9 +157,7 @@ class LatentDistributionTest(BaseInference):
         Y_sampled = np.zeros(Y.shape)
         for i in range(m):
             Y_sampled[:,i] = Y[:, i] + stats.multivariate_normal.rvs(0, cov=sigma_Y[i]).T
-        X_sampled = X_sampled.T
-        Y_sampled = Y_sampled.T
-        return X_sampled, Y_sampled
+        return X_sampled.T, Y_sampled.T
 
     def _bootstrap(self, X, Y, M=200):
         N, _ = X.shape
@@ -176,7 +173,7 @@ class LatentDistributionTest(BaseInference):
             statistics[i] = self._statistic(bs_X2, bs_Y2)
         return statistics
 
-    def fit(self, A1, A2, pass_graph=True, correct=False):
+    def fit(self, A1, A2, pass_graph=True, correct=False, median_heuristic=True):
         """
         Fits the test to the two input graphs
 
@@ -204,7 +201,8 @@ class LatentDistributionTest(BaseInference):
             X1_hat, X2_hat = self._embed(A1, A2)
         else:
             X1_hat, X2_hat = A1, A2
-        X1_hat, X2_hat = self._median_heuristic(X1_hat, X2_hat)
+        if median_heuristic:
+            X1_hat, X2_hat = self._median_heuristic(X1_hat, X2_hat)
         if correct: #TODO
             X1_hat, X_hat = self._sample_noisy_points(X1_hat, X2_hat)
         U = self._statistic(X1_hat, X2_hat)
